@@ -1,0 +1,8 @@
+# The runtime images only need bin/. Keep everything else out of the build context.
+scripts
+deploy
+*.md
+.env
+.env.*
+!.env.example
+.git
