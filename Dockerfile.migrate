@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+#
+# One-shot migration image. Builds and runs `meridian-migrate`, which embeds the
+# repo's migrations/ at COMPILE TIME (sqlx::migrate!("../../migrations")) and
+# applies them via MIGRATION_DATABASE_URL against the DIRECT Postgres endpoint.
+#
+# Because migrations are embedded at compile time, this image must be REBUILT
+# whenever a migration is added — a stale image silently skips new migrations.
+#
+# Build (from the repo root):
+#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.migrate -t meridian-migrate:latest .
+# Run:
+#   docker run --rm -e MIGRATION_DATABASE_URL=postgresql://meridian_migrator:PW@host:5432/meridian \
+#     meridian-migrate:latest
+#
+# ---------------------------------------------------------------------------
+# Stage 1 — builder.
+# ---------------------------------------------------------------------------
+FROM rust:1.95-bookworm AS builder
+
+# aws-lc-rs / rustls pull C + assembly builds in transitively; same deps as the
+# main image builder.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      cmake perl clang libclang-dev pkg-config git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+# Plain cargo build (no dx). migrations/ must be present in the context so the
+# sqlx::migrate! macro can embed it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release -p meridian-platform --bin meridian-migrate \
+ && mkdir -p /out \
+ && cp target/release/meridian-migrate /out/meridian-migrate
+
+# ---------------------------------------------------------------------------
+# Stage 2 — runtime: minimal, runs the migrator once and exits.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --shell /usr/sbin/nologin app
+
+COPY --from=builder /out/meridian-migrate /usr/local/bin/meridian-migrate
+
+USER app
+
+# Reads MIGRATION_DATABASE_URL from the environment; exits 0 on success.
+ENTRYPOINT ["/usr/local/bin/meridian-migrate"]

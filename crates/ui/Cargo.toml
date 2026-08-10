@@ -1,0 +1,21 @@
+[package]
+name = "meridian-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The design-system crate: the token layer plus the components built on it.
+#
+# `dioxus-primitives` (the headless, ARIA-accessible primitives) is the intended
+# behavioural layer per docs/product/04-DESIGN-SYSTEM.md. It is deliberately NOT
+# a dependency yet: it is pre-1.0, crates.io carries only a `0.0.0` placeholder,
+# and the documented workflow is to vendor `.rs` source at a pinned commit. That
+# pin is a reviewed decision, so this crate ships the token foundation first —
+# which is step 1 of the migration ("bootstrap, no visual change") — and the
+# vendored components land against a chosen commit afterwards.
+[dependencies]
+dioxus = { workspace = true }
+
+[lints]
+workspace = true

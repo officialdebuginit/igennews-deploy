@@ -1,0 +1,7 @@
+/target
+/dist
+/.dioxus
+/.env
+/.env.local
+*.log
+.DS_Store

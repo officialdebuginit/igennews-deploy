@@ -1,0 +1,9 @@
+services:
+  pgbouncer:
+    environment:
+      # The existing administrative user remains PgBouncer's auth_user. Client
+      # credentials are looked up from PostgreSQL so runtime roles do not need
+      # to be written into a generated userlist file.
+      AUTH_QUERY: >-
+        SELECT rolname, CASE WHEN rolvaliduntil < pg_catalog.now() THEN NULL ELSE rolpassword END
+        FROM pg_authid WHERE rolname=$1 AND rolcanlogin

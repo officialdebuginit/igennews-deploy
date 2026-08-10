@@ -1,0 +1,40 @@
+# Keep the build context small and reproducible. The build DOES need: crates/,
+# migrations/, config/, Cargo.toml, Cargo.lock, Dioxus.toml, rust-toolchain.toml
+# and the per-crate assets/ dirs — none of those are excluded here.
+
+# Rust / dx build outputs (rebuilt inside the image; huge)
+/target
+/dist
+/.dioxus
+
+# VCS + editor
+/.git
+/.github
+.gitignore
+*.log
+.DS_Store
+**/.DS_Store
+
+# Secrets and local env (never bake these into an image)
+.env
+.env.*
+!.env.docker.example
+
+# JS tooling (none is needed to build; keep it out if present)
+**/node_modules
+
+# Design / brand source assets that the build does not consume
+COMPANY LOGO - PNG - ALL DIMENSIONS
+COMPANY LOGO - SVG - ALL DIMENSIONS copy
+Improved-Design
+sector-data-excel
+.kombai
+
+# Repo documentation (not needed to compile)
+*.md
+
+# Docker artifacts themselves
+Dockerfile
+Dockerfile.migrate
+docker-compose.yml
+.dockerignore

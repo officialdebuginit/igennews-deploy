@@ -1,0 +1,238 @@
+# Production stack for the Meridian newsroom app.
+#
+#   postgres      — PostgreSQL 18, provisions roles/schema/extensions on first init
+#   pgbouncer     — transaction-pooling in front of Postgres (the pooled endpoint)
+#   rustfs        — S3-compatible object storage
+#   createbuckets — one-shot: creates the media buckets in rustfs
+#   migrate       — one-shot: applies embedded SQLx migrations, then exits
+#   app           — the meridian-web fullstack server (WASM client + Axum API)
+#
+# Secrets come from a git-ignored `.env` in this directory. Start from the
+# template:  cp .env.docker.example .env  (then fill in every value).
+# Image tags are pinned deliberately; `latest` would make the stack non-reproducible.
+#
+# Bring-up:  docker compose up -d --build
+# See deploy/README.md for the full runbook (incl. the pgbouncer-restart caveat).
+
+name: meridian
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    container_name: meridian-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # PgBouncer's userlist/AUTH_QUERY auth below depends on scram-sha-256.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      # Consumed only by the first-init provisioning script (01-provision.sh).
+      MERIDIAN_OWNER_PASSWORD: ${MERIDIAN_OWNER_PASSWORD}
+      MERIDIAN_MIGRATOR_PASSWORD: ${MERIDIAN_MIGRATOR_PASSWORD}
+      MERIDIAN_APP_PASSWORD: ${MERIDIAN_APP_PASSWORD}
+      MERIDIAN_WORKER_PASSWORD: ${MERIDIAN_WORKER_PASSWORD}
+      MERIDIAN_READONLY_PASSWORD: ${MERIDIAN_READONLY_PASSWORD}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements,auto_explain,pg_prewarm,pg_buffercache"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "pg_prewarm.autoprewarm=on"
+    volumes:
+      # PG 18+ expects the mount at /var/lib/postgresql (NOT .../data).
+      - postgres-data:/var/lib/postgresql
+      # First-init hook + the reviewed SQL it runs (read-only). Runs ONCE, when
+      # postgres-data is empty. To re-provision, remove the volume.
+      - ./deploy/postgres/docker-init:/docker-entrypoint-initdb.d:ro
+      - ./deploy/postgres/roles.sql:/provision/roles.sql:ro
+      - ./deploy/postgres/required-extensions.sql:/provision/required-extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - meridian
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: meridian-pgbouncer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      # auth_user for the pooler; the app connects THROUGH it as meridian_app.
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "500"
+      DEFAULT_POOL_SIZE: "20"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      ADMIN_USERS: ${POSTGRES_USER}
+      LISTEN_PORT: "6432"
+      # Look client credentials up from pg_authid so runtime roles (meridian_app)
+      # need no generated userlist file. Mirrors deploy/compose/pgbouncer-auth-query.override.yml.
+      # $$1 → literal $1 (a Postgres positional param) after Compose de-escapes $$.
+      AUTH_QUERY: >-
+        SELECT rolname, CASE WHEN rolvaliduntil < pg_catalog.now() THEN NULL ELSE rolpassword END
+        FROM pg_authid WHERE rolname=$$1 AND rolcanlogin
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U $${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - meridian
+
+  rustfs:
+    # S3-compatible object storage (github.com/rustfs/rustfs). Pre-1.0; pinned.
+    image: rustfs/rustfs:1.0.0-beta.9
+    container_name: meridian-rustfs
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_USER}
+      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_PASSWORD}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      # Any HTTP response on :9000 means the S3 listener is up (an unauthenticated
+      # GET / is refused by S3 semantics, which is still a response).
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:9000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - meridian
+
+  createbuckets:
+    # One-shot: create the app + media buckets. RustFS starts empty, and the app's
+    # readiness probe head_bucket()s S3_BUCKET, so this must run before the app.
+    image: amazon/aws-cli:2.17.20
+    container_name: meridian-createbuckets
+    restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET}
+    entrypoint: ["/bin/sh", "-c"]
+    # path-style addressing: the app's aws-sdk-s3 client uses force_path_style(true),
+    # so the CLI must too. `mb` is idempotent enough here (|| true on re-runs).
+    command:
+      - >
+        aws configure set default.s3.addressing_style path;
+        until aws --endpoint-url http://rustfs:9000 s3 ls >/dev/null 2>&1; do
+          echo 'waiting for rustfs...'; sleep 2;
+        done;
+        aws --endpoint-url http://rustfs:9000 s3 mb "s3://$${S3_BUCKET}" || true;
+        aws --endpoint-url http://rustfs:9000 s3 mb "s3://$${MEDIA_S3_BUCKET}" || true;
+        echo 'buckets ready'
+    networks:
+      - meridian
+
+  migrate:
+    # One-shot: applies embedded SQLx migrations against the DIRECT Postgres
+    # endpoint as meridian_migrator, then exits. Rebuild this image whenever a
+    # migration is added (migrations are embedded at compile time).
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    image: meridian-migrate:latest
+    container_name: meridian-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://meridian_migrator:${MERIDIAN_MIGRATOR_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    networks:
+      - meridian
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    image: meridian-web:latest
+    container_name: meridian-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      # Bind address for the dx-bundled server (dioxus_cli_config reads IP/PORT).
+      IP: "0.0.0.0"
+      PORT: "3100"
+      # Pooled traffic via PgBouncer; session-scoped work via the direct endpoint.
+      # validate() requires these two to be DIFFERENT host:port — they are.
+      DATABASE_URL: postgresql://meridian_app:${MERIDIAN_APP_PASSWORD}@pgbouncer:6432/${POSTGRES_DB}
+      DATABASE_DIRECT_URL: postgresql://meridian_app:${MERIDIAN_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Object storage (platform probe bucket).
+      S3_ENDPOINT_URL: http://rustfs:9000
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${RUSTFS_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${RUSTFS_ROOT_PASSWORD}
+      S3_REGION: ${S3_REGION}
+      # Object storage (owned-media store — separate bucket/creds by design).
+      MEDIA_S3_ENDPOINT: http://rustfs:9000
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET}
+      MEDIA_S3_ACCESS_KEY: ${RUSTFS_ROOT_USER}
+      MEDIA_S3_SECRET_KEY: ${RUSTFS_ROOT_PASSWORD}
+      MEDIA_S3_REGION: ${S3_REGION}
+      # >= 64 chars, enforced at startup.
+      MERIDIAN_AUTH_SECRET: ${MERIDIAN_AUTH_SECRET}
+      RUST_LOG: ${RUST_LOG:-meridian=info,tower_http=info}
+      # Optional background-job toggles (see crates/web/src/server.rs):
+      #   MERIDIAN_DISABLE_SCHEDULER, MERIDIAN_SCHEDULER_INTERVAL_SECS,
+      #   MERIDIAN_DISABLE_WEBHOOKS, MERIDIAN_EXPOSE_RESET_TOKENS
+      MERIDIAN_EXPOSE_RESET_TOKENS: ${MERIDIAN_EXPOSE_RESET_TOKENS:-false}
+    ports:
+      - "${APP_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3100/health/live || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - meridian
+
+volumes:
+  postgres-data:
+    name: meridian-postgres-data
+  rustfs-data:
+    name: meridian-rustfs-data
+
+networks:
+  meridian:
+    name: meridian
+    driver: bridge

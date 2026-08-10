@@ -1,0 +1,12 @@
+[application]
+name = "meridian-rust"
+default_platform = "web"
+out_dir = "dist"
+asset_dir = "assets"
+
+[web.app]
+title = "Meridian Newsroom — Rust Foundation"
+
+[web.watcher]
+reload_html = true
+

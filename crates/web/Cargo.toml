@@ -1,0 +1,67 @@
+[package]
+name = "meridian-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["fullstack", "router"] }
+meridian-contracts = { path = "../contracts" }
+meridian-ui = { path = "../ui" }
+serde = { workspace = true, features = ["derive"] }
+# Required on every target: the shared story/version view types carry the story
+# body as a `serde_json::Value` (the legacy jsonb block array), so it cannot be
+# feature-gated behind `web`/`server`.
+serde_json = { workspace = true }
+
+gloo-net = { version = "0.6", optional = true }
+# Persists the rotating refresh token so a browser reload does not drop the
+# session. Same family as gloo-net, already a dependency.
+gloo-storage = { version = "0.3", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+axum = { workspace = true, optional = true, features = ["multipart"] }
+anyhow = { workspace = true, optional = true }
+# Server-side outbound HTTP: pull a partner ninjs feed for automated ingest.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+sha2 = { workspace = true, optional = true }
+# Server-side image compression on upload (jpeg/png only, to keep the dep tree small).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
+meridian-platform = { path = "../platform", optional = true }
+meridian-identity = { path = "../identity", optional = true }
+meridian-newsroom = { path = "../newsroom", optional = true }
+uuid = { workspace = true, optional = true }
+time = { version = "0.3", features = ["serde", "serde-well-known"], optional = true }
+tower = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[features]
+default = []
+web = ["dioxus/web", "dep:gloo-net", "dep:gloo-storage", "dep:js-sys"]
+server = [
+    "dioxus/server",
+    "dep:axum",
+    "dep:anyhow",
+    "dep:reqwest",
+    "dep:meridian-platform",
+    "dep:meridian-identity",
+    "dep:meridian-newsroom",
+    "dep:uuid",
+    "dep:time",
+    "dep:sha2",
+    "dep:image",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:tokio",
+    "dep:tokio-stream",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+]
+
+[lints]
+workspace = true
