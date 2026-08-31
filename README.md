@@ -15,7 +15,7 @@ source code, no compile step**. The container images just package the binary.
 | `Dockerfile.migrate` | Runtime image for the migration one-shot. |
 | `docker-compose.yml` | The full stack: app + Postgres + PgBouncer + RustFS + migrate + bucket init. |
 | `.env.example` | Every required variable (fill in before deploy). |
-| `scripts/` | Database seeds (`seed-sectors.sql`, `seed-igennews.sql`, `seed_content_api.py`). |
+| `scripts/` | Database seeds. `seed-all.sh` runs all three in order (`seed-sectors.sql`, `seed-roles.sql`, `seed-igennews.sql`); `SEED-GAPS.md` records coverage. |
 | `deploy/README.md`, `ACCOUNTS.md` | Full runbook + the seeded accounts/roles. |
 
 ## Deploy
@@ -32,12 +32,22 @@ curl http://localhost:3100/health/live      # liveness
 curl http://localhost:3100/health/ready      # DB + object store
 
 # 4. Seed the demo newsroom (once)
-for f in seed-sectors.sql seed-igennews.sql; do
+for f in seed-sectors.sql seed-roles.sql seed-igennews.sql; do
   docker compose cp "scripts/$f" postgres:/tmp/$f
   docker compose exec postgres \
     psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/$f
 done
 ```
+
+> **Seed with the owner/migrator role, not the application role.**
+> `seed-igennews.sql` begins with `TRUNCATE`, which requires table ownership. In a
+> deployment that separates roles the application role (`DATABASE_DIRECT_URL`)
+> cannot truncate, and seeding with it fails on the first statement. Point
+> `SEED_DATABASE_URL` at the owner/migrator role; `scripts/seed-all.sh` checks this
+> before it writes anything and tells you which role to use.
+>
+> Re-running is safe: every step clears what it writes first, so applying the seed
+> repeatedly leaves identical data.
 
 Sign in at `http://<host>:3100/sign-in`: **`admin@igennews.com` / `DevPass123!`**
 (super-admin). All accounts + roles: [`ACCOUNTS.md`](ACCOUNTS.md). Full runbook:

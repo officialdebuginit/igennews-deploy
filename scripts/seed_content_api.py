@@ -103,7 +103,10 @@ def build_article(sector_name, industry, n):
     for j in range(3):
         paras.append(BODY_POOL[1 + ((n + j) % (len(BODY_POOL) - 1))].format(desc=desc, sec=sec, indl=indl))
     paras.append(KICKERS[n % len(KICKERS)].format(indl=indl))
-    blocks = [{"type": "heading", "text": title}] + [{"type": "paragraph", "text": p} for p in paras]
+    # No heading block for the title: the story already carries it in `title`,
+    # and repeating it as the first body block made every article print its own
+    # headline twice — once as the <h1>, once as the opening line of the body.
+    blocks = [{"type": "paragraph", "text": p} for p in paras]
     tags = [sec.lower(), indl] + [w for w in indl.split()[:2]]
     return title, dek, blocks, sector_name, PRIORITIES[n % len(PRIORITIES)], TYPES[n % len(TYPES)], tags
 

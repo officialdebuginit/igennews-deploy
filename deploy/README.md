@@ -144,7 +144,7 @@ scripts/seed-all.sh --with-content --base-url https://your-host --per-sector 5
 Inside the compose stack (run the SQL seeds through the postgres container):
 
 ```sh
-for f in seed-sectors.sql seed-igennews.sql; do
+for f in seed-sectors.sql seed-roles.sql seed-igennews.sql; do
   docker compose cp "scripts/$f" postgres:/tmp/$f
   docker compose exec postgres \
     psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/$f
@@ -153,6 +153,16 @@ done
 
 After seeding, sign in as **`admin@igennews.com` / `DevPass123!`** (super-admin).
 Every account and its role/capabilities are listed in `docs/IGENNEWS-ACCOUNTS.md`.
+
+> **Seed with the owner/migrator role, not the application role.**
+> `seed-igennews.sql` begins with `TRUNCATE`, which requires table ownership. In a
+> deployment that separates roles the application role (`DATABASE_DIRECT_URL`)
+> cannot truncate, and seeding with it fails on the first statement. Point
+> `SEED_DATABASE_URL` at the owner/migrator role; `scripts/seed-all.sh` checks this
+> before it writes anything and tells you which role to use.
+>
+> Re-running is safe: every step clears what it writes first, so applying the seed
+> repeatedly leaves identical data.
 
 > `seed-igennews.sql` is destructive to *people and editorial content*
 > (TRUNCATE/DELETE) but never touches the sectors or industries. Re-running it is a

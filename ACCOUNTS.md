@@ -6,8 +6,12 @@ handle). Accounts exist only after you run the seed:
 
 ```bash
 set -a; source .env.local; set +a
-/opt/homebrew/opt/libpq/bin/psql "$DATABASE_DIRECT_URL" -v ON_ERROR_STOP=1 -f scripts/seed-igennews.sql
+SEED_DATABASE_URL="$MIGRATION_DATABASE_URL" scripts/seed-all.sh
 ```
+
+> Use the **owner/migrator** URL, not `DATABASE_DIRECT_URL`. The seed opens with
+> `TRUNCATE`, which the application role is not granted, so seeding as the app user
+> fails on the first statement. `seed-all.sh` checks this before writing anything.
 
 > Org-wide **role** (`users.role`) is the person's standing across the newsroom.
 > **Capabilities** are what a role can *do*; they resolve per-sector, except the
