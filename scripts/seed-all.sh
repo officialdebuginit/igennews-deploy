@@ -60,6 +60,14 @@ MSG
   exit 1
 fi
 
+# A seed written against a hand-modified database can reference columns no
+# migration creates. Postgres reports only the first one, mid-file, with most of
+# the seed already applied; this lists all of them before anything is written.
+if [ -f "$HERE/check-seed-columns.py" ] && command -v python3 >/dev/null 2>&1; then
+  python3 "$HERE/check-seed-columns.py" "$PSQL" "$DB" \
+    "$HERE/seed-sectors.sql" "$HERE/seed-roles.sql" "$HERE/seed-igennews.sql" || exit 1
+fi
+
 run() {
   printf '  %-22s ' "$(basename "$1")"
   "$PSQL" "$DB" -v ON_ERROR_STOP=1 -q -f "$1" >/dev/null

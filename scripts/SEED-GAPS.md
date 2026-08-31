@@ -290,6 +290,35 @@ Two things stopped an empty database from being seeded by the documented command
 people and the full editorial trail in about half a second, and three consecutive
 runs leave identical counts.
 
+## Verified against a database built from the migrations
+
+Everything above was originally checked against a database restored from a dump of
+the development database. That is not the same thing as a database a deployment
+would actually have, and the difference mattered: **the dev database carries 14
+columns on `users` that no migration creates** — `title`, `bio`, `location`,
+`pronouns`, `phone`, `timezone`, `languages`, `skills`, `availability_status`,
+`profile_visibility` and four more. No application SQL reads or writes any of them;
+the app selects only the migration-created columns, and the curated profile lives in
+the `profile` jsonb that migration `0026_user_profile` adds.
+
+The seed was writing ten of those drifted columns, so **it failed on the first
+`INSERT` against a freshly migrated database** — `column "title" of relation "users"
+does not exist`. Nothing was lost by removing them: every value was already
+duplicated inside `profile`, which is what the application actually reads. All 35
+seeded profiles still carry bio, location and skills.
+
+The seed is now verified end to end on a database built the way a deployment builds
+one: `deploy/postgres/roles.sql` for the schema and grants, then all 44 migrations
+applied as `meridian_migrator`, then `seed-all.sh`. That path also confirms the
+privilege split is real rather than a local artifact — `meridian_migrator` owns the
+tables and can `TRUNCATE`; `meridian_app` can `INSERT` but not `TRUNCATE`.
+
+`check-seed-columns.py` now runs from `seed-all.sh` before anything is written. It
+compares every `INSERT` column list in all three seed files against the target
+database's `information_schema` and reports **all** mismatches at once. Postgres
+reports only the first, and only once execution reaches it — mid-file, with most of
+the seed already applied and no indication of how many more are wrong.
+
 ## Still open
 
 - **`sources.access_level` is written but never read.** The column has no check
