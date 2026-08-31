@@ -1,8 +1,8 @@
-# Runtime image for the one-shot migration runner — the PRE-BUILT Linux binary.
-# It embeds every migration at compile time, so no SQL files are needed here.
+# Runtime image for the one-shot migration runner — pre-built for the build platform.
 FROM debian:bookworm-slim
+ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-COPY bin/meridian-migrate /usr/local/bin/meridian-migrate
+COPY bin/${TARGETARCH}/meridian-migrate /usr/local/bin/meridian-migrate
 ENTRYPOINT ["/usr/local/bin/meridian-migrate"]
